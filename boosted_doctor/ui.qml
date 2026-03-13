@@ -48,8 +48,8 @@ Rectangle {
     property color statusColor: colorRed
 
     function getBatTypeString(type) {
-        if (type === 1) return "SRB"
-        if (type === 2) return "XRB"
+        if (type === 1) return "SR"
+        if (type === 2) return "XR"
         if (type === 3) return "Rev"
         return "Unknown"
     }

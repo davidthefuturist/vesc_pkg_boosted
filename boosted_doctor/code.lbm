@@ -13,7 +13,7 @@
 ; --- State Variables ---
 (define val-cell-count 12) ; Default to 12
 (define cell-voltage-buffer (bufcreate 30))
-(define AFE_RX_BUF_SIZE 2048)
+(define AFE_RX_BUF_SIZE 256)
 (define afe-rx-buf (bufcreate AFE_RX_BUF_SIZE)) ; Ring Buffer
 (define afe-rx-head 0) ; Write Index
 (define afe-rx-tail 0) ; Read Index
@@ -233,8 +233,8 @@
   (set-bms-val 'bms-v-tot val-pack-volt)
   (set-bms-val 'bms-i-in-ic (* val-amps -1.0))
   (set-bms-val 'bms-soc (/ val-soc 100.0))
-  ; (set-bms-val 'bms-v-cell-min val-cell-min)
-  ; (set-bms-val 'bms-v-cell-max val-cell-max)
+  (set-bms-val 'bms-v-cell-min val-cell-min)
+  (set-bms-val 'bms-v-cell-max val-cell-max)
   
   ; Transmit Cell Voltages from Buffer
   (let ((i 0))
@@ -527,10 +527,10 @@
           (setq val-bat-type bat-type-enum)
           
           ; --- NEW CODE: Update cell count based on battery type ---
-          (cond
-              ((= bat-type-enum BAT_TYPE_XRB) (setq val-cell-count 13))
-              ((or (= bat-type-enum BAT_TYPE_SRB) (= bat-type-enum BAT_TYPE_REV)) (setq val-cell-count 12))
-          )
+          ;(cond
+          ;    ((= bat-type-enum BAT_TYPE_XRB) (setq val-cell-count 13))
+          ;    ((or (= bat-type-enum BAT_TYPE_SRB) (= bat-type-enum BAT_TYPE_REV)) (setq val-cell-count 12))
+          ;)
           ; ---------------------------------------------------------
 
           (debug-print (str-merge "  -> [ID] Enum: " (str-from-n bat-type-enum)))
