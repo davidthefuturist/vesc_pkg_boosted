@@ -8,7 +8,10 @@ Rectangle {
     id: container
     anchors.fill: parent
     color: colorBg
+    property string tabTitle: "Boosted Doctor" 
 
+
+    
     property Commands mCommands: VescIf.commands()
     property bool connected: false
     property int soc: 0
@@ -19,18 +22,17 @@ Rectangle {
     property int verMajor: 0
     property int verMinor: 0
     property int verPatch: 0
+    
     property string fwVersion: verMajor + "." + verMinor + "." + verPatch
-    
-    
-    property int bmsSerial: 0
-    property int charger: 0
-
     readonly property int commGetStatus: 1
     readonly property int commGetCells: 2
     readonly property int commPfailReset: 3
     property double amps: 0.0
     property int valBtnState: 0
     property var cellVoltages: []
+
+    property int bmsSerial: 0
+    property int charger: 0
 
     readonly property color colorRed: "#FF5252"
     readonly property color colorGreen: "#66BB6A"
@@ -42,6 +44,7 @@ Rectangle {
     readonly property color colorText: "#ffffff"
     readonly property color colorLightText: "#aaaaaa"
 
+    
     property var lastUpdateTime: new Date()
     property string timeSinceUpdate: "0"
     property string statusText: "Status: connecting..."
@@ -52,6 +55,39 @@ Rectangle {
         if (type === 2) return "XR"
         if (type === 3) return "Rev"
         return "Unknown"
+    }
+
+    function getBatTypeStringLong(type) {
+        if (type === 1) return "Standard Range (SR)"
+        if (type === 2) return "Extended Range (XR)"
+        if (type === 3) return "Rev"
+        return "Unknown"
+    }
+
+    function getChargeStateString() {
+        if (charger === 1) {
+            if (amps > 0.2) return "Charging";
+            if (amps >= 0.0 && amps <= 0.2 && ((maxCellVolt - minCellVolt) * 1000).toFixed(0)>100) return "Balancing - Keep Charger Connected";
+            if (amps >= 0.0 && amps <= 0.2 && ((maxCellVolt - minCellVolt) * 1000).toFixed(0)<=100) return "Ready To Ride";
+            return "Plugged In"; 
+        } 
+        else {
+            if (amps > 0.2) return "Regen";
+            if (amps < -0.2) return "Discharging";
+            return "Idle"; 
+        }
+    }
+
+    function getStateOfChargeString() {
+        if (charger === 1) {
+            // if (amps > 0.2) return "Charging";
+            if (((maxCellVolt - minCellVolt) * 1000).toFixed(0)>100) return "NOT READY TO RIDE";
+            return "State Of Charge"; 
+        } 
+        else {
+            if (((maxCellVolt - minCellVolt) * 1000).toFixed(0)>100) return "NOT READY TO RIDE; PLUG CHARGER";
+            return "State Of Charge"; 
+        }
     }
 
     function getBtnStateString(s) {
@@ -69,19 +105,6 @@ Rectangle {
         if (s === 0x0B) return "was held <2s"
         if (s === 0x0C) return "was held >2s"
         return "0x" + s.toString(16).toUpperCase()
-    }
-
-    // Charge State Helper
-    function getChargeStateString() {
-        if (charger === 1) {
-            if (amps > 0.2) return "Charging";
-            if (amps >= 0.0 && amps <= 0.2) return "Balancing - Keep Charger Connected";
-            return "Plugged In / Idle"; //This should theoretically not show up
-        } else {
-            if (amps > 0.2) return "Regen";
-            if (amps < -0.2) return "Discharging";
-            return "Idle"; //This should only show when abttery is at rest
-        }
     }
 
     Timer {
@@ -176,6 +199,7 @@ Rectangle {
         anchors.margins: 0
         clip: true
 
+        // Ensure the content fills the width
         contentWidth: availableWidth
         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
         ScrollBar.horizontal.interactive: false
@@ -190,7 +214,7 @@ Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 40
                 color: {
-                    var base = connected ? colorPanel : colorPanel;
+                    var base = connected ? colorPanel : colorPanel; // Always panel color
                     return statusMouseArea.pressed ? Qt.darker(base, 1.2) : base;
                 }
                 radius: 5
@@ -199,7 +223,7 @@ Rectangle {
                     anchors.centerIn: parent
                     color: colorWhite
                     font.pointSize: 18
-                    text: connected ? (getBatTypeString(batType) + " " + fwVersion) : "No battery detected"
+                    text: connected ? (getBatTypeStringLong(batType)) : "No battery detected" 
                 }
 
                 Text {
@@ -222,10 +246,10 @@ Rectangle {
                 Menu {
                     id: statusMenu
                     y: parent.height
-                    width: parent.width
+                    width: parent.width // Match width of status bar
                     
                     MenuItem {
-                        text: "Clear Red Light Of Death"
+                        text: "Clear Red Light of Death"
                         onTriggered: {
                             var buffer = new ArrayBuffer(1);
                             var dv = new DataView(buffer);
@@ -241,7 +265,7 @@ Rectangle {
             Text {
                 visible: !connected
                 Layout.fillWidth: true
-                Layout.maximumWidth: parent.width
+                Layout.maximumWidth: parent.width // Force wrap
                 text: "Battery is either disconnected or in deep sleep. Press the power button to wake and connect automatically.\n\nPlease ensure the baud rate of all VESC devices are set to 250k."
                 color: colorLightText
                 font.pointSize: 14
@@ -249,12 +273,97 @@ Rectangle {
                 wrapMode: Text.WordWrap
             }
 
+            
+
             Text {
                 visible: connected
-                text: `State of Charge: ${soc}%`
+                text: `${getStateOfChargeString()}: ${soc}%`
                 color: soc < 20 ? colorRed : (soc < 50 ? colorAmber : colorGreen)
                 font.pointSize: 16
                 Layout.alignment: Qt.AlignHCenter
+            }
+
+            Text {
+                    text: getBatTypeStringLong(batType) + " Battery"
+                    font.pointSize: 20
+                    font.bold: true
+                    color: colorLightText
+
+                }
+
+            GridLayout {
+                visible: connected
+                columns: 2
+                Layout.fillWidth: true
+                rowSpacing: 5
+                columnSpacing: 10
+
+                Text {
+                    text: "Firmware: "
+                    font.pointSize: 14
+                    color: colorLightText
+                    
+                    
+                }
+                
+
+
+                Text {
+                    text: fwVersion
+                    font.pointSize: 14
+                    color: colorLightText
+                    
+                    
+                }
+
+                Text {
+                    text: "Serial: "
+                    font.pointSize: 14
+                    color: colorLightText
+                    
+                    
+                }
+
+                Text {
+                    text: bmsSerial
+                    font.pointSize: 14
+                    color: colorLightText
+                    
+                    
+                }
+
+                Text {
+                    text: "Voltage:"
+                    color: colorLightText
+                    font.pointSize: 14
+                }
+                Text {
+                    text: packVolt.toFixed(2) + "V"
+                    color: colorText
+                    font.pointSize: 14
+                }
+                Text {
+                    text: "Cells:"
+                    color: colorLightText
+                    font.pointSize: 14
+                }
+                Text {
+                    text: minCellVolt.toFixed(3) + "V - " + maxCellVolt.toFixed(3) + "V  |  " + ((maxCellVolt - minCellVolt) * 1000).toFixed(0) + "ΔmV"
+                    color: (maxCellVolt - minCellVolt) > 0.2 ? colorRed : ((maxCellVolt - minCellVolt) > 0.1 ? colorAmber : colorText)
+                    font.pointSize: 14
+                }
+
+
+                Text {
+                    text: "State:"
+                    color: colorLightText
+                    font.pointSize: 14
+                }
+                Text {
+                    text: getChargeStateString() + "  |  " + Math.abs(amps).toFixed(2) + "A"
+                    color: colorText 
+                    font.pointSize: 14
+                }
             }
 
             GridLayout {
@@ -264,64 +373,17 @@ Rectangle {
                 rowSpacing: 10
                 columnSpacing: 10
 
-                Text {
-                    text: "Voltage:"
-                    color: colorLightText
-                    font.pointSize: 16
-                }
-                Text {
-                    text: packVolt.toFixed(2) + "V"
-                    color: colorText
-                    font.pointSize: 16
-                }
-                Text {
-                    text: "Cells:"
-                    color: colorLightText
-                    font.pointSize: 16
-                }
-                Text {
-                    text: minCellVolt.toFixed(3) + "V - " + maxCellVolt.toFixed(3) + "V  |  " + ((maxCellVolt - minCellVolt) * 1000).toFixed(0) + "ΔmV"
-                    color: (maxCellVolt - minCellVolt) > 0.2 ? colorRed : ((maxCellVolt - minCellVolt) > 0.1 ? colorAmber : colorText)
-                    font.pointSize: 16
-                }
-
-                Text {
-                    text: "State:"
-                    color: colorLightText
-                    font.pointSize: 16
-                }
-                
-                // --- APPLYING THE NEW HELPER FUNCTION HERE ---
-                Text {
-                    text: getChargeStateString() + "  |  " + Math.abs(amps).toFixed(2) + "A"
-                    color: colorText 
-                    font.pointSize: 16
-                }
-            }
-
-            GridLayout {
-                visible: connected
-                columns: 1
-                Layout.fillWidth: true
-                rowSpacing: 10
-                columnSpacing: 10
-
                 Repeater {
                     model: cellVoltages
                     delegate: ColumnLayout {
-                        
-                        Layout.row: Math.floor(index / 1)
-                        Layout.column: index % 1
-                        
-
                         Layout.fillWidth: true
                         spacing: 2
                         
-                        // Text {
-                        //     text: "Cell " + (index + 1)
-                        //     color: colorLightText
-                        //     font.pointSize: 12
-                        // }
+                        Text {
+                            text: "Cell " + (index + 1)
+                            color: colorLightText
+                            font.pointSize: 12
+                        }
 
                         ProgressBar {
                             Layout.fillWidth: true
@@ -358,7 +420,7 @@ Rectangle {
                                 
                                 Text {
                                     anchors.centerIn: parent
-                                    text: "Cell " + (index + 1) + "   " + modelData.toFixed(3) + "V"
+                                    text: modelData.toFixed(3) + "V"
                                     color: colorText
                                     font.pixelSize: 12
                                     font.bold: true
@@ -370,7 +432,6 @@ Rectangle {
                     }
                 }
             }
-
             Item { height: 20 }
         }
     }
@@ -382,7 +443,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.margins: 10
-        height: 30 
+        height: 30 // Increased height for better spacing
 
         Text {
             anchors.centerIn: parent
@@ -400,11 +461,6 @@ Rectangle {
             if (str.startsWith("data:status ")) {
                 lastUpdateTime = new Date();
                 var tokens = str.split(" ");
-                
-                // --- FIXED PARSING INDICES ---
-                // Expected Order from Lisp: 
-                // [0]data:status [1]<connected> [2]<type> [3]<vMaj> [4]<vMin> [5]<vPatch> 
-                // [6]<bmsSerial> [7]<volt> [8]<soc> [9]<min> [10]<max> [11]<amps> [12]<charger> [13]<btnState>
                 
                 connected = Number(tokens[1]) > 0;
                 batType = Number(tokens[2]);
@@ -425,9 +481,12 @@ Rectangle {
             }
             else if (str.startsWith("data:cells ")) {
                 var tokens = str.split(" ");
+                // data:cells v1 v2 ...
+                // Slice off the first token ("data:cells")
                 var newCells = [];
                 for (var i = 1; i < tokens.length; i++) {
                     if (tokens[i].length > 0) {
+                        // incoming is mV integer, convert to Volts
                         newCells.push(Number(tokens[i]) / 1000.0);
                     }
                 }

@@ -1,16 +1,6 @@
 ; Boosted Board CAN Protocol Implementation
 
-; --- Constants ---
-(define COMM_GET_STATUS       1)
-(define COMM_GET_CELLS        2)
-(define COMM_PFAIL_RESET      3)
-
-(define BAT_TYPE_UNKNOWN      0)
-(define BAT_TYPE_SRB          1)
-(define BAT_TYPE_XRB          2)
-(define BAT_TYPE_REV          3)
-
-; --- State Variables ---
+; --- Mutable State Variables (heap) ---
 (define val-cell-count 12) ; Default to 12
 (define cell-voltage-buffer (bufcreate 30))
 (define AFE_RX_BUF_SIZE 256)
@@ -21,9 +11,31 @@
 (define afe-line-buf (bufcreate 64)) ; Linear Line Buffer
 (define afe-line-len 0) ; Current Line Length
 (define debug-enable nil)
-(define print-cells-enable nil) 
-(define last-cells-print-time 0) 
 (define tx-counter 0)
+(define val-bms-serial 0)
+(define val-charger 0)
+(define print-cells-enable nil)
+
+; --- Pre-allocated TX Buffers ---
+; GETAFECELLS
+(define afe-cells-payload1 (bufcreate 8))
+(bufset-u8 afe-cells-payload1 0 0x47) ; G
+(bufset-u8 afe-cells-payload1 1 0x45) ; E
+(bufset-u8 afe-cells-payload1 2 0x54) ; T
+(bufset-u8 afe-cells-payload1 3 0x41) ; A
+(bufset-u8 afe-cells-payload1 4 0x46) ; F
+(bufset-u8 afe-cells-payload1 5 0x45) ; E
+(bufset-u8 afe-cells-payload1 6 0x43) ; C
+(bufset-u8 afe-cells-payload1 7 0x45) ; E
+(define afe-cells-payload2 (bufcreate 5))
+(bufset-u8 afe-cells-payload2 0 0x4C) ; L
+(bufset-u8 afe-cells-payload2 1 0x4C) ; L
+(bufset-u8 afe-cells-payload2 2 0x53) ; S
+(bufset-u8 afe-cells-payload2 3 0x0D) ; \r
+(bufset-u8 afe-cells-payload2 4 0x0A) ; \n
+; PING
+(define ping-payload (bufcreate 8))
+(bufclear ping-payload)
 
 (define last-boosted-bms-rx-time 0)
 (define last-vesc-bms-tx-time 0)
@@ -35,24 +47,45 @@
 (define val-soc 0)
 (define val-pack-volt 0.0)
 
-(define val-bat-type BAT_TYPE_UNKNOWN)
+(define val-bat-type 0) ; BAT_TYPE_UNKNOWN
 (define val-cell-min 0.0)
 (define val-cell-max 0.0)
 (define val-ver-major 0)
 (define val-ver-minor 0)
 (define val-ver-patch 0)
-(define val-bms-serial 0)
-(define val-charger 0)
-
 (define val-amps 0.0)
 (define val-btn-state 0)
 
-
-
-; --- Parsing Helpers ---
+; --- Parsing Result Globals (used as out-params) ---
 (define parse-res-val 0)
 (define parse-res-idx 0)
 
+@const-start
+
+(defun send-reboot () {
+  (var p (bufcreate 8))
+  (bufset-u8 p 0 0x52) (bufset-u8 p 1 0x45) (bufset-u8 p 2 0x42) (bufset-u8 p 3 0x4F)
+  (bufset-u8 p 4 0x4F) (bufset-u8 p 5 0x54) (bufset-u8 p 6 0x0D) (bufset-u8 p 7 0x0A)
+  (can-send-eid 0x10346110u32 p)
+  (print "TX: REBOOT")
+})
+
+(defun verbose-readout () (setq debug-enable (not debug-enable)))
+(defun cells-only () (setq print-cells-enable (not print-cells-enable)))
+
+
+
+; --- Protocol Constants ---
+(define COMM_GET_STATUS       1)
+(define COMM_GET_CELLS        2)
+(define COMM_PFAILRESET      3)
+
+(define BAT_TYPE_UNKNOWN      0)
+(define BAT_TYPE_SRB          1)
+(define BAT_TYPE_XRB          2)
+(define BAT_TYPE_REV          3)
+
+; --- Parsing Helpers ---
 (defun is-digit (c) (and (>= c 48) (<= c 57)))
 
 (defun parse-int-buf (buf idx limit) {
@@ -258,31 +291,27 @@
 })
 
 (defun send-get-afe-cells () {
-  ; Msg 1: GETAFECE
-  (var payload1 (bufcreate 8))
-  (bufset-u8 payload1 0 0x47) ; G
-  (bufset-u8 payload1 1 0x45) ; E
-  (bufset-u8 payload1 2 0x54) ; T
-  (bufset-u8 payload1 3 0x41) ; A
-  (bufset-u8 payload1 4 0x46) ; F
-  (bufset-u8 payload1 5 0x45) ; E
-  (bufset-u8 payload1 6 0x43) ; C
-  (bufset-u8 payload1 7 0x45) ; E
-  
-  ; Msg 2: LLS\r\n
-  (var payload2 (bufcreate 5))
-  (bufset-u8 payload2 0 0x4C) ; L
-  (bufset-u8 payload2 1 0x4C) ; L
-  (bufset-u8 payload2 2 0x53) ; S
-  (bufset-u8 payload2 3 0x0D) ; \r
-  (bufset-u8 payload2 4 0x0A) ; \n
-
-  (can-send-eid 0x10246110u32 payload1)
-  (can-send-eid 0x10146111u32 payload2)
-    
+  (can-send-eid 0x10246110u32 afe-cells-payload1)
+  (can-send-eid 0x10146111u32 afe-cells-payload2)
   (if debug-enable {
       (debug-print "TX: GETAFECELLS")
   })
+})
+
+(defun send-reboot () {
+  ; Msg: REBOOT\r\n
+  (var p (bufcreate 8))
+  (bufset-u8 p 0 0x52) ; R
+  (bufset-u8 p 1 0x45) ; E
+  (bufset-u8 p 2 0x42) ; B
+  (bufset-u8 p 3 0x4F) ; O
+  (bufset-u8 p 4 0x4F) ; O
+  (bufset-u8 p 5 0x54) ; T
+  (bufset-u8 p 6 0x0D) ; \r
+  (bufset-u8 p 7 0x0A) ; \n
+  
+  (can-send-eid 0x10346110u32 p) 
+  (print "TX: REBOOT")
 })
 
 (defun send-pfailreset () {
@@ -304,28 +333,10 @@
   (bufset-u8 payload2 2 0x0D) ; \r
   (bufset-u8 payload2 3 0x0A) ; \n
 
-  (can-send-eid 0x10246110u32 payload1) 
+  (can-send-eid 0x10246110u32 payload1)
   (can-send-eid 0x10146111u32 payload2)
     
   (print "TX: PFAILRESET")
-})
-
-
-(defun send-reboot () {
-  ; Msg 1: REBOOT\r\n
-  (var payload1 (bufcreate 8))
-  (bufset-u8 payload1 0 0x52) ; R
-  (bufset-u8 payload1 1 0x45) ; E
-  (bufset-u8 payload1 2 0x42) ; B
-  (bufset-u8 payload1 3 0x4F) ; O
-  (bufset-u8 payload1 4 0x4F) ; O
-  (bufset-u8 payload1 5 0x54) ; T
-  (bufset-u8 payload1 6 0x0D) ; \r
-  (bufset-u8 payload1 7 0x0A) ; \n
-  
-  (can-send-eid 0x10346110u32 payload1) 
-    
-  (print "TX: REBOOT")
 })
 
 (defun process-afe-buffer () {
@@ -339,27 +350,32 @@
          ; Read Byte from Ring Buffer
          (var b (bufget-u8 afe-rx-buf afe-rx-tail))
          (setq afe-rx-tail (mod (+ afe-rx-tail 1) AFE_RX_BUF_SIZE))
+         
+         ; Log Raw (DISABLED: High Overhead)
+         ;(if (or (and (>= b 32) (<= b 126)) (= b 10) (= b 13)) {
+         ;    (setq raw-log-str (str-merge raw-log-str (str-from-n b "%c")))
+         ;} {
+         ;    (setq raw-log-str (str-merge raw-log-str "."))
+         ;})
 
          ; Process Byte
          (if (= b 10) { ; Newline \n
-             ; Parse Line ONLY if we have a proper length
-             (if (> afe-line-len 5) { 
+             ; Parse Line
+             (if (> afe-line-len 0) {
                  (if (try-parse-cell-buf afe-line-buf 0 afe-line-len) {
                      (setq cells-updated (+ cells-updated 1))
                  })
              })
-             ; Reset line length AFTER processing
              (setq afe-line-len 0)
          } {
-             ; Ignore \r (13) and only add valid characters
-             (if (and (!= b 13) (< afe-line-len 64)) { 
+             (if (and (!= b 13) (< afe-line-len 64)) { ; Ignore \r
                  (bufset-u8 afe-line-buf afe-line-len b)
                  (setq afe-line-len (+ afe-line-len 1))
              })
          })
          
          (setq processed-count (+ processed-count 1))
-         (if (> processed-count AFE_RX_BUF_SIZE) (setq loop-check nil))
+         (if (> processed-count AFE_RX_BUF_SIZE) (setq loop-check nil)) ; Yield only after full buffer drain
      })
 
      (if (> cells-updated 0) {
@@ -375,6 +391,8 @@
 (defun publish-status () {
     (var connected 0)
     (if (< (secs-since last-boosted-bms-rx-time) 2.0) (setq connected 1))
+    
+    ; Index Map: [1]conn [2]type [3]vMaj [4]vMin [5]vPatch [6]serial [7]volt [8]soc [9]min [10]max [11]amps [12]charger [13]btn
     (send-data (str-merge "data:status " 
         (str-from-n connected) " " 
         (str-from-n val-bat-type) " "
@@ -392,8 +410,6 @@
 })
 
 ; --- Process CAN Messages ---
-
-
 (defun process-can-frame (id data) {
   (var header (bitwise-and (shr id 4) 0xFFFFF))
   (var dlc (buflen data))
@@ -504,7 +520,6 @@
     ((= header 0x33443)
       (if (>= dlc 8) {
           (setq last-boosted-bms-rx-time (systime))
-          ; Use let for local variables instead of define
           (var bat-type (bufget-u8 data 0))
           (var bat-ext (bufget-u8 data 4))
           (var bat-type-enum BAT_TYPE_UNKNOWN)
@@ -522,17 +537,7 @@
                   (setq bat-type-enum BAT_TYPE_UNKNOWN)
               )
           )
-          
-          ; Assign the detected battery type
           (setq val-bat-type bat-type-enum)
-          
-          ; --- NEW CODE: Update cell count based on battery type ---
-          ;(cond
-          ;    ((= bat-type-enum BAT_TYPE_XRB) (setq val-cell-count 13))
-          ;    ((or (= bat-type-enum BAT_TYPE_SRB) (= bat-type-enum BAT_TYPE_REV)) (setq val-cell-count 12))
-          ;)
-          ; ---------------------------------------------------------
-
           (debug-print (str-merge "  -> [ID] Enum: " (str-from-n bat-type-enum)))
       })
     )
@@ -598,11 +603,9 @@
         (var pwr-str "")
         (var chg-str "")
 
-
-        (setq val-charger charger-conn)
-
         ; Combine Timer
         (setq state-timer (bitwise-or tmr-lsb (shl tmr-msb 8)))
+        (setq val-charger (bufget-u8 data 0)) ; Global variable for charger state
 
         ; Decode Power State
         (if (= pwr-state 0x00) (setq pwr-str "On")
@@ -628,14 +631,22 @@
       ;(debug-print "  -> [CTR]")
     })
 
+    ; [SERIAL] ID_BTY_SERIAL (0x33441)
     ((= header 0x33441)
       (if (>= dlc 4) {
+          ; Let's grab the first 4 bytes as Unsigned 32-bit
+          (setq val-bms-serial (bufget-u32 data 0 'little-endian))
+          
+          ; DIAGNOSTIC: Print the raw bytes to the VESC terminal to see if the '1' is in bytes 4-7
+          (if debug-enable {
+              (print (str-merge "SERIAL DEBUG | Dec: " (str-from-n val-bms-serial) 
+                                " | Hex: " (str-from-n (bufget-u8 data 3) "%02X") 
+                                           (str-from-n (bufget-u8 data 2) "%02X")
+                                           (str-from-n (bufget-u8 data 1) "%02X")
+                                           (str-from-n (bufget-u8 data 0) "%02X")))
+              (if (> dlc 4) (print (str-merge "  Extra Bytes: " (str-from-n (bufget-u8 data 4) "%02X"))))
+          })
           (setq last-boosted-bms-rx-time (systime))
-          
-          ; Extract 32-bit signed integer (little-endian) directly from bytes 0-3
-          (setq val-bms-serial (bufget-i32 data 0 'little-endian))
-          
-          (debug-print (str-merge "  -> [SERIAL] " (str-from-n val-bms-serial)))
       })
     )
 
@@ -668,18 +679,13 @@
                    (setq msg (str-merge msg " " (str-from-n mv)))
                    (setq i (+ i 1))
               })
-              
-              
-              (debug-print (str-merge "UI PAYLOAD: " msg))
-              
               (send-data msg)
           })
-          (if (= cmd COMM_PFAIL_RESET) {
+          (if (= cmd COMM_PFAILRESET) {
               (send-pfailreset)
               (send-reboot)
               (send-reboot)
               (send-reboot)
-
           })
         })
       })
@@ -689,15 +695,13 @@
 )
 
 (defun send-ping () {
-  (var payload (bufcreate 8))
-  (bufclear payload) ; Ensure zeros  
   ; Construct ID: 0x10 << 24 | ID_ESC_PING_BASE << 4 | counter (4 bits)
   (var base-id 0x103434B0u32)
   (var ping-id (+ base-id (bitwise-and tx-counter 0xF)))
 
-  ; Send Extended ID
+  ; Send Extended ID (payload is pre-allocated zeros)
   (debug-print (str-merge "TX Ping ID: " (str-from-n ping-id "0x%X")))
-  (can-send-eid ping-id payload)
+  (can-send-eid ping-id ping-payload)
 
   ; Increment Counter
   (setq tx-counter (+ tx-counter 1))
@@ -709,21 +713,6 @@
     (sleep 0.1)
     ; Run buffer processing decoupled from RX
     (process-afe-buffer)
-
-    
-    (if (and print-cells-enable (> (secs-since last-cells-print-time) 1.0)) {
-        (var cell-str "CELLS:")
-        (var i 0)
-        (loopwhile (< i val-cell-count) {
-             (var mv (bufget-i16 cell-voltage-buffer (* i 2)))
-             ; Formats as: CELLS: [1]3.850V [2]3.849V ...
-             (setq cell-str (str-merge cell-str " [" (str-from-n (+ i 1)) "]" (str-from-n (/ mv 1000.0) "%.3f") "V"))
-             (setq i (+ i 1))
-        })
-        (print cell-str)
-        (setq last-cells-print-time (systime))
-    })
-    ; ---------------------------------------
 
     (var is-connected (< (secs-since last-boosted-bms-rx-time) 1.0))
     ;(debug-print (str-merge "DEBUG: LastRX: " (str-from-n (secs-since last-boosted-bms-rx-time))))
@@ -759,37 +748,7 @@
   })
 })
 
-
-
-(defun verbose-readout () {
-  (if debug-enable 
-      {
-          (setq debug-enable nil)
-          (print "Verbose readout DISABLED.")
-      } 
-      {
-          (setq debug-enable t)
-          (print "Verbose readout ENABLED.")
-      }
-  )
-})
-
-
-(defun cells-only () {
-  (if print-cells-enable
-      {
-          (setq print-cells-enable nil)
-          (print "Continuous cell readout DISABLED.")
-      }
-      {
-          (setq print-cells-enable t)
-          (print "Continuous cell readout ENABLED.")
-      }
-  )
-})
-
-
-
+@const-end
 
 ; --- Main Entry ---
 (print "Starting Boosted VESC Driver...")
@@ -801,6 +760,7 @@
 (event-enable 'event-data-rx)
 
 ; Spawn TX Loop
+;(send-reboot) ;REBOOT HERE HELPS WITH DEBUGGING; reboots the battery automatically so that the battery re-recognizes the ping
 (spawn tx-loop)
 
 (print "Driver Started. Waiting for Battery...")
