@@ -34,6 +34,9 @@ Rectangle {
     property int bmsSerial: 0
     property int charger: 0
 
+
+    property int voltageColumns: 2
+
     readonly property color colorRed: "#FF5252"
     readonly property color colorGreen: "#66BB6A"
     readonly property color colorAmber: "#FFC107"
@@ -259,6 +262,12 @@ Rectangle {
                             mCommands.sendCustomAppData(buffer);
                         }
                     }
+                    MenuItem {
+                        text: voltageColumns === 2 ? "Switch to 1 Column Layout" : "Switch to 2 Column Layout"
+                        onTriggered: {
+                            voltageColumns = (voltageColumns === 2 ? 1 : 2);
+                        }
+                    }
                 }
             }
 
@@ -368,9 +377,10 @@ Rectangle {
 
             GridLayout {
                 visible: connected
-                columns: 2
+                columns: voltageColumns
                 Layout.fillWidth: true
-                rowSpacing: 10
+                // Dynamic spacing: 6 for 1-column, 10 for 2-columns
+                rowSpacing: voltageColumns === 1 ? 6 : 10 
                 columnSpacing: 10
 
                 Repeater {
@@ -379,10 +389,14 @@ Rectangle {
                         Layout.fillWidth: true
                         spacing: 2
                         
+                        // Label only visible in 2-column mode
                         Text {
+                            visible: voltageColumns === 2
                             text: "Cell " + (index + 1)
                             color: colorLightText
                             font.pointSize: 12
+                            // Ensure it doesn't take up space when hidden
+                            Layout.preferredHeight: visible ? -1 : 0 
                         }
 
                         ProgressBar {
@@ -420,7 +434,11 @@ Rectangle {
                                 
                                 Text {
                                     anchors.centerIn: parent
-                                    text: modelData.toFixed(3) + "V"
+                                    // Dynamic Text: Combined for 1-column, Voltage-only for 2-columns
+                                    text: voltageColumns === 1 
+                                        ? "Cell " + (index + 1) + ":   " + modelData.toFixed(3) + "V"
+                                        : modelData.toFixed(3) + "V"
+                                    
                                     color: colorText
                                     font.pixelSize: 12
                                     font.bold: true
